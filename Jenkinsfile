@@ -56,14 +56,10 @@ pipeline {
             when { expression { return params.PUSH_DOCKER } }
             steps {
                 script {
-                    echo "Stopping old containers..."
-                    // This stops any old version running to free up the port
-                    sh "docker stop my-running-app || true"
-                    sh "docker rm my-running-app || true"
-                    
-                    echo "Starting new container..."
-                    // Runs the app on port 5000 (standard for Flask)
-                    sh "docker run -d --name my-running-app -p 5000:5000 ${params.DOCKER_IMAGE}:latest"
+                    echo "Deploying with Docker Compose..."
+                    // Stop and remove old containers, then start new ones in the background
+                    sh "docker-compose down || true"
+                    sh "docker-compose up -d"
                 }
             }
         }
