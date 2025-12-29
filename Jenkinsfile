@@ -4,9 +4,8 @@ pipeline {
     parameters {
         string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
         booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests?')
-        // Changed default to true so you can see it work
-        booleanParam(name: 'PUSH_DOCKER', defaultValue: true, description: 'Build and push Docker image?')
-        string(name: 'DOCKER_IMAGE', defaultValue: 'myorg/simple-app', description: 'Image name (repo/name)')
+        booleanParam(name: 'PUSH_DOCKER', defaultValue: true, description: 'Build image?')
+        string(name: 'DOCKER_IMAGE', defaultValue: 'simple-python-app', description: 'Image name')
     }
 
     environment {
@@ -16,7 +15,6 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                // CLEAN the workspace BEFORE downloading new code
                 cleanWs() 
                 checkout([$class: 'GitSCM',
                           branches: [[name: "refs/heads/${params.BRANCH}"]],
@@ -24,44 +22,48 @@ pipeline {
             }
         }
 
-        stage('Prepare') {
-            steps {
-                // Removed cleanWs() from here!
-                echo "Building branch: ${params.BRANCH}, build #: ${env.BUILD_NUMBER}"
-                sh 'ls -al' // Useful for debugging: see if your files are actually there
-            }
-        }
-
         stage('Build') {
             steps {
                 script {
-                    // Tip: Ensure these files (pom.xml, etc.) are in the ROOT of your GitHub repo
-                    if (fileExists('pom.xml')) {
-                        echo 'Detected Maven project'
-                        sh 'mvn -B -DskipTests package'
-                    } else if (fileExists('package.json')) {
-                        echo 'Detected Node.js project'
-                        sh 'npm install && npm run build --if-present'
-                    } else if (fileExists('index.html')) {
-                        echo 'Detected simple Static HTML project'
-                        // Static apps don't need a "build" command usually
+                    // Optimized for your Python files found in 'ls -al'
+                    if (fileExists('requirement.txt')) {
+                        echo 'Detected Python project'
+                        // If you have python installed on the server, you can test the install
+                        // sh 'pip install -r requirement.txt'
+                    } else if (fileExists('app.py')) {
+                        echo 'Detected Flask/Python app'
                     } else {
-                        echo 'No recognized build file found. Listing files to debug:'
-                        sh 'ls -R'
+                        echo 'No recognized build file found.'
                     }
                 }
             }
         }
 
-        stage('Docker Build & Push') {
-            // This will now run if a Dockerfile exists and the parameter is true
+        stage('Docker Build') {
             when { allOf { expression { fileExists('Dockerfile') }; expression { return params.PUSH_DOCKER } } }
             steps {
                 script {
                     def tag = "${params.DOCKER_IMAGE}:${env.BUILD_TAG}"
+                    // Building the image locally on the EC2
                     sh "docker build -t ${tag} ."
+                    sh "docker tag ${tag} ${params.DOCKER_IMAGE}:latest"
                     echo "Docker image built: ${tag}"
-                    // Note: 'docker push' will fail unless you've run 'docker login' or added credentials
+                }
+            }
+        }
+
+        stage('Deploy Local') {
+            when { expression { return params.PUSH_DOCKER } }
+            steps {
+                script {
+                    echo "Stopping old containers..."
+                    // This stops any old version running to free up the port
+                    sh "docker stop my-running-app || true"
+                    sh "docker rm my-running-app || true"
+                    
+                    echo "Starting new container..."
+                    // Runs the app on port 5000 (standard for Flask)
+                    sh "docker run -d --name my-running-app -p 5000:5000 ${params.DOCKER_IMAGE}:latest"
                 }
             }
         }
@@ -69,13 +71,13 @@ pipeline {
 
     post {
         success {
-            echo "Build ${env.BUILD_NUMBER} succeeded."
+            echo "Build ${env.BUILD_NUMBER} succeeded. App is running on port 5000."
         }
         failure {
-            echo "Build ${env.BUILD_NUMBER} failed."
+            echo "Build ${env.BUILD_NUMBER} failed. Check console logs."
         }
         always {
-            // Keep this here to clean up AFTER the build is done
+            // We keep the image on the server but clean the code files
             cleanWs()
         }
     }
